@@ -1,11 +1,14 @@
 import Phaser from 'phaser';
 import { BUBBLE_KINDS, TIER_COLOR, TIER_RADIUS, type BubbleKind } from './bubble';
 import { levels } from './levels';
+import { screenScale } from './view';
 
-/** Textures are drawn at S x resolution; display objects are scaled by 1 / S. */
-export const S = 3;
-/** Backdrop textures are large smooth gradients, so they use a lower density. */
-export const BS = 2;
+// Texture density follows the screen, not the window, so maximising the window never looks soft.
+const SCREEN_K = screenScale();
+/** Sprite textures are drawn at S x resolution; display objects are scaled by 1 / S. */
+export const S = SCREEN_K >= 1.5 ? 3 : 2;
+/** Backdrops are large smooth gradients, so they use a lower density (memory grows with BS squared). */
+export const BS = SCREEN_K > 1.6 ? 2 : SCREEN_K > 1 ? 1.5 : 1;
 export const GLOW = 10;
 export const PLAYER_FRAMES = [
   'idle0',
@@ -674,7 +677,7 @@ export function blockTexture(scene: Phaser.Scene, w: number, h: number): string 
 }
 
 /** Number of `yield`s in `generateArt`, used to report loading progress. */
-export const ART_STEPS = 3 + levels.length;
+export const ART_STEPS = 4;
 
 /** Generates every texture; yields between groups so the caller can keep the UI responsive. */
 export function* generateArt(scene: Phaser.Scene): Generator<void, void, void> {
@@ -832,25 +835,50 @@ export function* generateArt(scene: Phaser.Scene): Generator<void, void, void> {
 
   yield;
 
-  for (const [i, lv] of levels.entries()) {
-    make(scene, `bg_${i}`, BG_W, BG_H, (c) => drawSky(c, i), BS);
-    make(
-      scene,
-      `far_${i}`,
-      BG_W,
-      190,
-      (c) => drawSilhouette(c, STYLES[i], BG_W, 190, darken(lv.bg[1], 0.38, 0.9), 50 + i, false),
-      BS,
-    );
-    make(
-      scene,
-      `near_${i}`,
-      BG_W,
-      120,
-      (c) => drawSilhouette(c, STYLES[i], BG_W, 120, darken(lv.bg[1], 0.62, 0.95), 90 + i, true),
-      BS,
-    );
-    yield;
+  generateLevelArt(scene, 0); // the menu shows level 0's backdrop
+  yield;
+}
+
+// ------------------------------------------------------- per-level backdrops
+// Each level's backdrop is the biggest texture set (sky + two silhouette layers), but only one
+// level is on screen at a time, so they are generated on demand and released again.
+
+const loadedLevels = new Set<number>();
+const levelKeys = (i: number): string[] => [`bg_${i}`, `far_${i}`, `near_${i}`];
+
+/** Generates level `i`'s backdrop textures (no-op if they already exist). */
+export function generateLevelArt(scene: Phaser.Scene, i: number): void {
+  const lv = levels[i];
+  make(scene, `bg_${i}`, BG_W, BG_H, (c) => drawSky(c, i), BS);
+  make(
+    scene,
+    `far_${i}`,
+    BG_W,
+    190,
+    (c) => drawSilhouette(c, STYLES[i], BG_W, 190, darken(lv.bg[1], 0.38, 0.9), 50 + i, false),
+    BS,
+  );
+  make(
+    scene,
+    `near_${i}`,
+    BG_W,
+    120,
+    (c) => drawSilhouette(c, STYLES[i], BG_W, 120, darken(lv.bg[1], 0.62, 0.95), 90 + i, true),
+    BS,
+  );
+  loadedLevels.add(i);
+}
+
+/**
+ * Makes level `i` the only loaded backdrop. Call it only once nothing on screen still uses the
+ * previous level's textures (destroy those display objects first).
+ */
+export function setLevelArt(scene: Phaser.Scene, i: number): void {
+  generateLevelArt(scene, i);
+  for (const other of [...loadedLevels]) {
+    if (other === i) continue;
+    for (const key of levelKeys(other)) if (scene.textures.exists(key)) scene.textures.remove(key);
+    loadedLevels.delete(other);
   }
 }
 

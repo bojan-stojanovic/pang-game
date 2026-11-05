@@ -90,6 +90,7 @@ export class Sfx {
   muted = false;
   private ctx: AudioContext | null = null;
   private musicGain: GainNode | null = null;
+  private hatHp: BiquadFilterNode | null = null;
   private noise: AudioBuffer | null = null;
   private timer: number | null = null;
   private track: Track | null = null;
@@ -240,6 +241,17 @@ export class Sfx {
     }
   }
 
+  /** One shared high-pass for every hi-hat, instead of a new filter node per hit. */
+  private hatFilter(ctx: AudioContext): BiquadFilterNode {
+    if (!this.hatHp) {
+      this.hatHp = ctx.createBiquadFilter();
+      this.hatHp.type = 'highpass';
+      this.hatHp.frequency.value = 7000;
+      this.hatHp.connect(this.out(ctx));
+    }
+    return this.hatHp;
+  }
+
   private out(ctx: AudioContext): GainNode {
     if (!this.musicGain) {
       this.musicGain = ctx.createGain();
@@ -284,13 +296,10 @@ export class Sfx {
     if (hat) {
       const src = ctx.createBufferSource();
       src.buffer = this.noiseBuffer(ctx);
-      const hp = ctx.createBiquadFilter();
-      hp.type = 'highpass';
-      hp.frequency.value = 7000;
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(s % 4 === 2 ? 0.05 : 0.025, when);
       gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.05);
-      src.connect(hp).connect(gain).connect(this.out(ctx));
+      src.connect(gain).connect(this.hatFilter(ctx));
       src.start(when);
       src.stop(when + 0.06);
     }

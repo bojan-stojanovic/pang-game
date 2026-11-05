@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { touch } from '../touch';
-import { BS, S, bubbleKey } from './art';
+import { BS, S, bubbleKey, setLevelArt } from './art';
 import { TIER_RADIUS } from './bubble';
 import { loadBest } from './PlayScene';
 import { addSettingsButton } from './settingsButton';
@@ -23,6 +23,7 @@ export class MenuScene extends Phaser.Scene {
 
   create(): void {
     this.texts = [];
+    setLevelArt(this, 0); // returning from a later level: swap its backdrop back to level 0's
     this.add.image(0, 0, 'bg_0').setOrigin(0).setScale(1 / BS);
     this.far = this.add.tileSprite(0, FLOOR - 190, W, 190, 'far_0').setOrigin(0).setTileScale(1 / BS, 1 / BS);
     this.near = this.add.tileSprite(0, FLOOR - 120, W, 120, 'near_0').setOrigin(0).setTileScale(1 / BS, 1 / BS);

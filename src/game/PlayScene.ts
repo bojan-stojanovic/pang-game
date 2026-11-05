@@ -9,9 +9,9 @@ import {
   split,
   stepBubble,
 } from './bubble';
-import { circleRect, circleVSegment, type Rect } from './collision';
+import { circleRect, circleVSegment, type Circle, type Rect } from './collision';
 import { levels, type LevelDef, type Weather } from './levels';
-import { BS, S, blockTexture, bubbleKey, type PowerKind } from './art';
+import { BS, S, blockTexture, bubbleKey, generateLevelArt, setLevelArt, type PowerKind } from './art';
 import { H, W, setupView, viewScale } from './view';
 import { addSettingsButton } from './settingsButton';
 import { haptic, onSettingsOpen, settings, settingsUi } from '../settings';
@@ -77,9 +77,12 @@ interface Ambient {
   size: number;
   phase: number;
 }
-interface TrailPoint {
-  x: number;
-  y: number;
+/** Recent positions of one bubble, as parallel number arrays (cheaper than an object per point). */
+interface Trail {
+  x: number[];
+  y: number[];
+  /** Frame number this trail was last used, to drop trails of bubbles that are gone. */
+  seen: number;
 }
 
 const POWER_WEIGHTS: [PowerKind, number][] = [
@@ -112,6 +115,20 @@ const WEATHER: Record<Weather, { count: number; depth: number; tint: number; alp
   snow: { count: 80, depth: 11.5, tint: 0xffffff, alpha: 0.7 },
   embers: { count: 50, depth: 11.5, tint: 0xff8a3d, alpha: 0.9 },
 };
+
+const MAX_PARTICLES = 240;
+const MAX_FLOAT_TEXTS = 8;
+const MAX_RINGS = 24;
+
+/** Removes matching items in place, without allocating a new array like `filter` does. */
+function removeIf<T>(arr: T[], test: (item: T) => boolean): void {
+  let n = 0;
+  for (let i = 0; i < arr.length; i++) if (!test(arr[i])) arr[n++] = arr[i];
+  arr.length = n;
+}
+const isDeadHarpoon = (h: Harpoon): boolean => h.dead;
+const isExpired = (p: PowerUp): boolean => p.life <= 0;
+const isDeadParticle = (p: Particle): boolean => p.life <= 0;
 
 const hex = (s: string): number => parseInt(s.slice(1), 16);
 const clamp = (v: number, a: number, b: number): number => Math.max(a, Math.min(b, v));
@@ -159,7 +176,17 @@ export class PlayScene extends Phaser.Scene {
   private bannerSub!: Phaser.GameObjects.Text;
   private bannerKey = '';
   private builtLevel = -1;
-  private trails = new Map<Bubble, TrailPoint[]>();
+  private trails = new Map<Bubble, Trail>();
+  private floatPool: Phaser.GameObjects.Text[] = [];
+  private ringPool: Phaser.GameObjects.Image[] = [];
+  private frame = 0;
+  // reused every tick so collision checks don't allocate
+  private circle: Circle = { x: 0, y: 0, r: 0 };
+  private body: Rect = { x: 0, y: FLOOR - PLAYER_H, w: PLAYER_W, h: PLAYER_H };
+  private spawned: Bubble[] = [];
+  // last colours applied to HUD text; changing a Text's colour re-renders it, so only do it on change
+  private timeLow = false;
+  private comboColor = '';
 
   // game state
   private state: State = 'playing';
@@ -223,6 +250,11 @@ export class PlayScene extends Phaser.Scene {
     this.partSpr = [];
     this.heartSpr = [];
     this.trails = new Map();
+    this.floatPool = [];
+    this.ringPool = [];
+    this.frame = 0;
+    this.timeLow = false;
+    this.comboColor = '#ffd166';
     this.builtLevel = -1;
     this.bannerKey = '';
     this.paused = false;
@@ -255,7 +287,7 @@ export class PlayScene extends Phaser.Scene {
 
     this.createActors();
     this.createHud();
-    setupView(this, () => [...Object.values(this.hud), this.bannerTitle, this.bannerSub]);
+    setupView(this, () => [...Object.values(this.hud), this.bannerTitle, this.bannerSub, ...this.floatPool]);
 
     this.lives = START_LIVES;
     this.score = 0;
@@ -354,6 +386,8 @@ export class PlayScene extends Phaser.Scene {
     this.ambient = [];
     const i = this.levelIdx;
     this.builtLevel = i;
+    // the previous level's display objects are gone, so its backdrop textures can be released
+    setLevelArt(this, i);
     const add = <T extends Obj>(o: T): T => {
       this.levelObjs.push(o);
       return o;
@@ -525,7 +559,7 @@ export class PlayScene extends Phaser.Scene {
       p.t += dt;
       p.y = Math.min(FLOOR - 16, p.y + 120 * dt);
     }
-    this.powerUps = this.powerUps.filter((p) => p.life > 0);
+    removeIf(this.powerUps, isExpired);
     this.updateParticles(dt);
   }
 
@@ -572,9 +606,22 @@ export class PlayScene extends Phaser.Scene {
     }
 
     // harpoon vs bubble
-    const spawned: Bubble[] = [];
+    // (plain loops and reused scratch objects: this runs every tick, so it must not allocate)
+    const spawned = this.spawned;
+    spawned.length = 0;
+    const c = this.circle;
     for (const h of this.harpoons) {
-      const idx = this.bubbles.findIndex((b) => circleVSegment({ x: b.x, y: b.y, r: radius(b) }, h.x, h.top, FLOOR));
+      let idx = -1;
+      for (let i = 0; i < this.bubbles.length; i++) {
+        const b = this.bubbles[i];
+        c.x = b.x;
+        c.y = b.y;
+        c.r = radius(b);
+        if (circleVSegment(c, h.x, h.top, FLOOR)) {
+          idx = i;
+          break;
+        }
+      }
       if (idx < 0) continue;
       const b = this.bubbles[idx];
       h.dead = true;
@@ -585,26 +632,37 @@ export class PlayScene extends Phaser.Scene {
       this.bubbles.splice(idx, 1);
       this.popBubble(b, spawned);
     }
-    this.harpoons = this.harpoons.filter((h) => !h.dead);
-    this.bubbles.push(...spawned);
+    removeIf(this.harpoons, isDeadHarpoon);
+    for (const s of spawned) this.bubbles.push(s);
 
     // bubble vs player
     if (this.invuln <= 0) {
-      const body: Rect = { x: this.px - PLAYER_W / 2, y: FLOOR - PLAYER_H, w: PLAYER_W, h: PLAYER_H };
-      if (this.bubbles.some((b) => circleRect({ x: b.x, y: b.y, r: radius(b) }, body))) {
+      const body = this.body;
+      body.x = this.px - PLAYER_W / 2;
+      let hit = false;
+      for (const b of this.bubbles) {
+        c.x = b.x;
+        c.y = b.y;
+        c.r = radius(b);
+        if (circleRect(c, body)) {
+          hit = true;
+          break;
+        }
+      }
+      if (hit) {
         this.playerHit();
         return;
       }
     }
 
     // pickups
-    this.powerUps = this.powerUps.filter((p) => {
+    for (let i = this.powerUps.length - 1; i >= 0; i--) {
+      const p = this.powerUps[i];
       if (Math.abs(p.x - this.px) < PLAYER_W / 2 + 14 && p.y > FLOOR - PLAYER_H - 14) {
+        this.powerUps.splice(i, 1);
         this.collect(p);
-        return false;
       }
-      return true;
-    });
+    }
 
     this.comboTimer = Math.max(0, this.comboTimer - dt);
     if (this.comboTimer === 0) this.combo = 0;
@@ -621,6 +679,9 @@ export class PlayScene extends Phaser.Scene {
       this.addScore(this.levelBonus);
       this.state = 'levelClear';
       this.stateTimer = 2.2;
+      // build the next backdrop while the "Level clear" banner is up, so the switch has no hitch
+      const next = this.levelIdx + 1;
+      if (next < levels.length) this.time.delayedCall(400, () => generateLevelArt(this, next));
       this.combo = 0;
       this.sfx.clear();
       for (let i = 0; i < 50; i++) {
@@ -637,8 +698,13 @@ export class PlayScene extends Phaser.Scene {
         continue;
       }
       h.top -= HARPOON_SPEED * dt;
-      const block = this.level.blocks.find((b) => h.x >= b.x && h.x <= b.x + b.w && h.top < b.y + b.h);
-      const limit = block ? block.y + block.h : CEILING;
+      let limit = CEILING;
+      for (const b of this.level.blocks) {
+        if (h.x >= b.x && h.x <= b.x + b.w && h.top < b.y + b.h) {
+          limit = b.y + b.h;
+          break;
+        }
+      }
       if (h.top <= limit) {
         if (this.stickyTime > 0) {
           h.top = limit;
@@ -648,7 +714,7 @@ export class PlayScene extends Phaser.Scene {
         }
       }
     }
-    this.harpoons = this.harpoons.filter((h) => !h.dead);
+    removeIf(this.harpoons, isDeadHarpoon);
   }
 
   // -------------------------------------------------------------- effects
@@ -663,7 +729,7 @@ export class PlayScene extends Phaser.Scene {
 
   private spawnParticle(x: number, y: number, color: number, speedMul = 1): void {
     const quality = settings.particles === 'off' ? 0 : settings.particles === 'low' ? 0.35 : 1;
-    if (Math.random() >= quality) return;
+    if (Math.random() >= quality || this.particles.length >= MAX_PARTICLES) return;
     const a = Math.random() * Math.PI * 2;
     const s = (60 + Math.random() * 160) * speedMul;
     const max = 0.45 + Math.random() * 0.35;
@@ -681,39 +747,55 @@ export class PlayScene extends Phaser.Scene {
 
   private ring(x: number, y: number, r: number, color: number): void {
     if (settings.particles === 'off') return;
-    const ring = this.img('ring', 11).setPosition(x, y).setBlendMode(Phaser.BlendModes.ADD).setTint(color);
-    ring.setScale(r / 28 / S);
+    // reuse a small pool of ring images instead of creating and destroying one per effect
+    let ring = this.ringPool.find((p) => !p.visible);
+    if (!ring) {
+      if (this.ringPool.length >= MAX_RINGS) return;
+      ring = this.img('ring', 11).setBlendMode(Phaser.BlendModes.ADD);
+      this.ringPool.push(ring);
+    }
+    const target = ring;
+    this.tweens.killTweensOf(target);
+    target.setVisible(true).setPosition(x, y).setTint(color).setAlpha(1).setScale(r / 28 / S);
     this.tweens.add({
-      targets: ring,
+      targets: target,
       scale: (r * 2.6) / 28 / S,
       alpha: 0,
       duration: 320,
       ease: 'Cubic.easeOut',
-      onComplete: () => ring.destroy(),
+      onComplete: () => target.setVisible(false),
     });
   }
 
   private floatText(x: number, y: number, text: string, color: string, size = 22): void {
-    const t = this.add
-      .text(clamp(x, 40, W - 40), Math.max(CEILING + 14, y), text, {
-        fontFamily: FONT,
-        fontSize: `${size}px`,
-        fontStyle: 'bold',
-        color,
-        stroke: STROKE,
-        strokeThickness: 4,
-      })
-      .setOrigin(0.5)
-      .setDepth(25)
-      .setResolution(viewScale());
+    // pooled: every Text owns a canvas and a GPU texture, so one per popup would churn memory
+    let t = this.floatPool.find((p) => !p.visible);
+    if (!t) {
+      if (this.floatPool.length >= MAX_FLOAT_TEXTS) return;
+      t = this.add
+        .text(0, 0, '', { fontFamily: FONT, fontStyle: 'bold', stroke: STROKE, strokeThickness: 4 })
+        .setOrigin(0.5)
+        .setDepth(25)
+        .setResolution(viewScale());
+      this.floatPool.push(t);
+    }
+    const target = t;
+    this.tweens.killTweensOf(target);
+    const py = Math.max(CEILING + 14, y);
+    target
+      .setStyle({ fontSize: `${size}px`, color })
+      .setText(text)
+      .setPosition(clamp(x, 40, W - 40), py)
+      .setAlpha(1)
+      .setVisible(true);
     this.tweens.add({
-      targets: t,
-      y: t.y - 46,
+      targets: target,
+      y: py - 46,
       alpha: 0,
       scale: { from: 0.7, to: 1.2 },
       duration: 850,
       ease: 'Cubic.easeOut',
-      onComplete: () => t.destroy(),
+      onComplete: () => target.setVisible(false),
     });
   }
 
@@ -836,7 +918,7 @@ export class PlayScene extends Phaser.Scene {
       p.y += p.vy * dt;
       p.vy += 520 * dt;
     }
-    this.particles = this.particles.filter((p) => p.life > 0);
+    removeIf(this.particles, isDeadParticle);
   }
 
   // --------------------------------------------------------------- render
@@ -922,18 +1004,33 @@ export class PlayScene extends Phaser.Scene {
     const frozen = this.freezeTime > 0;
 
     // light trails: recent positions per bubble, fading when a bubble stops moving
-    const next = new Map<Bubble, TrailPoint[]>();
+    // (the map and its number arrays persist between frames, so this allocates nothing per frame)
+    const frame = ++this.frame;
     let points = 0;
-    for (const b of fx ? this.bubbles : []) {
-      const trail = this.trails.get(b) ?? [];
-      const last = trail[trail.length - 1];
-      if (!last || Math.hypot(b.x - last.x, b.y - last.y) > 3) trail.push({ x: b.x, y: b.y });
-      else if (trail.length > 1) trail.shift();
-      while (trail.length > 7) trail.shift();
-      next.set(b, trail);
-      points += trail.length;
+    if (fx) {
+      for (const b of this.bubbles) {
+        let trail = this.trails.get(b);
+        if (!trail) {
+          trail = { x: [], y: [], seen: 0 };
+          this.trails.set(b, trail);
+        }
+        trail.seen = frame;
+        const len = trail.x.length;
+        if (len === 0 || Math.hypot(b.x - trail.x[len - 1], b.y - trail.y[len - 1]) > 3) {
+          trail.x.push(b.x);
+          trail.y.push(b.y);
+        } else if (len > 1) {
+          trail.x.shift();
+          trail.y.shift();
+        }
+        while (trail.x.length > 7) {
+          trail.x.shift();
+          trail.y.shift();
+        }
+        points += trail.x.length;
+      }
     }
-    this.trails = next;
+    for (const [b, trail] of this.trails) if (trail.seen !== frame) this.trails.delete(b);
     this.sync(this.trailSpr, points, () => this.img('dot', 9).setBlendMode(Phaser.BlendModes.ADD));
     let ti = 0;
 
@@ -962,15 +1059,18 @@ export class PlayScene extends Phaser.Scene {
         .setScale(sh, sh)
         .setAlpha(clamp(0.6 - height / 700, 0.12, 0.6));
 
-      const trail = this.trails.get(b) ?? [];
-      trail.forEach((p, j) => {
-        const f = (j + 1) / trail.length;
-        this.trailSpr[ti++]
-          .setPosition(p.x, p.y)
-          .setTint(color)
-          .setAlpha(0.2 * f * f)
-          .setScale((r * 2 * (0.3 + 0.55 * f)) / 12 / S);
-      });
+      const trail = this.trails.get(b);
+      if (trail) {
+        const len = trail.x.length;
+        for (let j = 0; j < len; j++) {
+          const f = (j + 1) / len;
+          this.trailSpr[ti++]
+            .setPosition(trail.x[j], trail.y[j])
+            .setTint(color)
+            .setAlpha(0.2 * f * f)
+            .setScale((r * 2 * (0.3 + 0.55 * f)) / 12 / S);
+        }
+      }
     });
   }
 
@@ -1091,7 +1191,11 @@ export class PlayScene extends Phaser.Scene {
     h.score.setText(`SCORE ${this.score}`);
     h.level.setText(`LEVEL ${this.levelIdx + 1}/${levels.length}`);
     const low = this.timeLeft < 10;
-    h.time.setText(`TIME ${Math.ceil(this.timeLeft)}`).setColor(low ? '#ff6b6b' : '#ffffff');
+    h.time.setText(`TIME ${Math.ceil(this.timeLeft)}`);
+    if (low !== this.timeLow) {
+      this.timeLow = low;
+      h.time.setColor(low ? '#ff6b6b' : '#ffffff');
+    }
     h.best.setText(`BEST ${this.best}`);
     this.heartSpr.forEach((s, i) =>
       s.setVisible(i < this.lives).setScale((1 + (i === this.lives - 1 ? Math.sin(this.animT * 5) * 0.06 : 0)) / S),
@@ -1110,7 +1214,12 @@ export class PlayScene extends Phaser.Scene {
     const comboOn = this.combo >= 2 && this.comboTimer > 0;
     h.combo.setVisible(comboOn);
     if (comboOn) {
-      h.combo.setText(`COMBO x${this.combo}`).setColor(COMBO_COLORS[Math.min(this.combo - 2, 4)]);
+      h.combo.setText(`COMBO x${this.combo}`);
+      const color = COMBO_COLORS[Math.min(this.combo - 2, 4)];
+      if (color !== this.comboColor) {
+        this.comboColor = color;
+        h.combo.setColor(color);
+      }
       if (this.combo !== this.shownCombo) {
         h.combo.setScale(1.45);
         this.tweens.add({ targets: h.combo, scale: 1, duration: 160, ease: 'Back.easeOut' });

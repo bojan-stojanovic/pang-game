@@ -22,7 +22,9 @@ const game = new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  render: { antialias: true, roundPixels: false },
+  // antialiasGL off: skips the multisampled backbuffer (several times the canvas memory at high
+  // resolution); sprites still get smooth edges from linear texture filtering.
+  render: { antialias: true, antialiasGL: false, roundPixels: false },
   disableContextMenu: true,
   scene: [BootScene, MenuScene, PlayScene],
 });
@@ -30,3 +32,23 @@ const game = new Phaser.Game({
 const sfx = new Sfx();
 game.registry.set('sfx', sfx);
 hooks.previewSfx = () => sfx.pop(1, 1);
+
+if (import.meta.env.DEV) {
+  // Dev-only: lets the console measure texture memory (see `textureMemoryMB`).
+  Object.assign(window, {
+    __pang: {
+      game,
+      textureMemoryMB: () => {
+        let bytes = 0;
+        let count = 0;
+        for (const key of game.textures.getTextureKeys()) {
+          if (key.startsWith('__')) continue;
+          const src = game.textures.get(key).getSourceImage() as { width: number; height: number };
+          bytes += src.width * src.height * 4;
+          count++;
+        }
+        return { textures: count, mb: Math.round((bytes / 1048576) * 10) / 10 };
+      },
+    },
+  });
+}
