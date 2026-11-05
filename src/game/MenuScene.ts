@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
 import { touch } from '../touch';
-import { BS, S } from './art';
+import { BS, S, bubbleKey } from './art';
 import { TIER_RADIUS } from './bubble';
 import { loadBest } from './PlayScene';
+import { addSettingsButton } from './settingsButton';
 import { H, W, setupView } from './view';
 
 const FONT = 'system-ui, sans-serif';
@@ -31,7 +32,7 @@ export class MenuScene extends Phaser.Scene {
     for (let i = 0; i < 6; i++) {
       const tier = i % 4;
       const r = TIER_RADIUS[tier];
-      const s = this.add.image(80 + i * 130, FLOOR - r, `bubble_${tier}`).setScale(1 / S);
+      const s = this.add.image(80 + i * 130, FLOOR - r, bubbleKey('normal', tier)).setScale(1 / S);
       this.tweens.add({
         targets: s,
         y: 140 + (i % 3) * 40,
@@ -91,7 +92,11 @@ export class MenuScene extends Phaser.Scene {
 
     const kb = this.input.keyboard!;
     this.startKeys = [kb.addKey('SPACE'), kb.addKey('ENTER')];
-    this.input.once('pointerdown', () => this.begin());
+    // taps on the gear button (a game object) must not start the game
+    this.input.on('pointerdown', (_p: Phaser.Input.Pointer, over: Phaser.GameObjects.GameObject[]) => {
+      if (over.length === 0) this.begin();
+    });
+    addSettingsButton(this, W - 26, 26, 10);
     this.scale.on('resize', this.updateTip, this);
     this.updateTip();
     setupView(this, () => this.texts);

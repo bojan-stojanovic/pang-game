@@ -96,6 +96,54 @@
         <button id="btn-fire" aria-label="Fire">FIRE</button>
       </div>
     </div>
+    <div id="settings" hidden role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="card">
+        <h2 id="settings-title">Settings</h2>
+
+        <label class="row">
+          <span>Music</span>
+          <input id="set-music" type="range" min="0" max="100" step="5" />
+          <output id="out-music"></output>
+        </label>
+        <label class="row">
+          <span>Sound effects</span>
+          <input id="set-sfx" type="range" min="0" max="100" step="5" />
+          <output id="out-sfx"></output>
+        </label>
+
+        <div class="row">
+          <span id="lbl-particles">Particles</span>
+          <div class="seg" role="radiogroup" aria-labelledby="lbl-particles">
+            <button type="button" role="radio" data-particles="off">Off</button>
+            <button type="button" role="radio" data-particles="low">Low</button>
+            <button type="button" role="radio" data-particles="full">Full</button>
+          </div>
+        </div>
+
+        <label class="row">
+          <span>Screen shake &amp; flashes</span>
+          <input id="set-shake" type="checkbox" class="switch" />
+        </label>
+        <label class="row">
+          <span>Weather effects</span>
+          <input id="set-weather" type="checkbox" class="switch" />
+        </label>
+        <label class="row">
+          <span>Bubble glow &amp; trails</span>
+          <input id="set-glow" type="checkbox" class="switch" />
+        </label>
+        <label class="row" id="row-vibration">
+          <span>Vibration</span>
+          <input id="set-vibration" type="checkbox" class="switch" />
+        </label>
+
+        <div class="actions">
+          <button type="button" id="set-reset">Reset to defaults</button>
+          <button type="button" id="set-close" class="primary">Done</button>
+        </div>
+        <p class="hint">Settings are saved on this device. Press M in game to mute everything.</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

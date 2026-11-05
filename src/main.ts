@@ -5,9 +5,12 @@ import { MenuScene } from './game/MenuScene';
 import { PlayScene } from './game/PlayScene';
 import { H, W, viewScale } from './game/view';
 import { Sfx } from './sfx';
+import { hooks } from './settings';
+import { initSettingsPanel } from './settingsPanel';
 import { initTouchControls } from './touch';
 
 initTouchControls();
+initSettingsPanel();
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,
@@ -24,4 +27,6 @@ const game = new Phaser.Game({
   scene: [BootScene, MenuScene, PlayScene],
 });
 
-game.registry.set('sfx', new Sfx());
+const sfx = new Sfx();
+game.registry.set('sfx', sfx);
+hooks.previewSfx = () => sfx.pop(1, 1);

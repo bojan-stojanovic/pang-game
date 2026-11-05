@@ -8,9 +8,15 @@ Playable on desktop (keyboard) and mobile (on-screen touch buttons).
 
 - 5 levels with increasing difficulty; levels 4 and 5 add solid blocks that bubbles bounce off
 - Bubbles in 4 sizes that split when hit, with squash-and-stretch physics
-- Power-ups: **double shot**, **shield**, **freeze**
+- Eight power-ups: **double shot**, **rapid fire** (hold to machine-gun), **sticky harpoon** (stays on the ceiling), **slow-mo**, **freeze**, **shield**, **dynamite** (pops all small bubbles) and **extra life**
+- Bubble variety: **triple** (splits in three), **horizontal** (splits into fast sideways bubbles), **armored** (takes two hits) and **erratic** (bounces unevenly)
+- Combo multiplier for popping bubbles in quick succession, with floating "x3" popups and a rising-pitch pop sound
+- Synthesized background music with a different track per level
+- Hit-stop on big pops, a slow-motion death, character reactions (watches and flinches from nearby bubbles, victory pose)
+- Animated weather per level: stars, rain, fireflies, snow and embers; glowing bubbles with light trails
 - Time limit per level, lives, score, time bonus and a saved best score
 - Procedurally generated art (no image files): glossy bubbles, animated character, parallax backgrounds, particles and screen shake
+- Settings (gear icon, top right): music and effects volume, particle amount (off / low / full), screen shake and flashes, weather effects, bubble glow and trails, and vibration. They are saved on the device, and the game pauses while the dialog is open
 - Renders at your screen's native resolution, so it stays sharp on high-density displays
 - Loading screen, pause, and mute
 
@@ -45,6 +51,8 @@ npm run dev
 
 Then open the URL Vite prints (default `http://localhost:5173`). The dev server also listens on your network, so you can open it from a phone on the same Wi-Fi.
 
+Add `?level=3` to the URL to start on a specific level (handy for testing).
+
 ### Scripts
 
 | Command | What it does |
@@ -64,6 +72,8 @@ src/
   main.ts               Phaser game config and bootstrap
   loader.ts             Loading screen control
   touch.ts              On-screen button state
+  settings.ts           Saved player settings (defaults, validation, storage)
+  settingsPanel.ts      Settings dialog controller
   sfx.ts                Synthesized sound effects
   style.css             Page and touch-button styles
   game/
